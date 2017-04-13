@@ -1,10 +1,10 @@
 package main
 
-import(
-	"fmt"
-	"net"
+import (
 	"errors"
 	"flag"
+	"fmt"
+	"net"
 	"os"
 	"time"
 	"work/gotool/goping/icmp"
@@ -26,7 +26,20 @@ func getIPAddr(host string) (net.IP, error) {
 	return nil, errors.New("IP address not found")
 }
 
-func pinger (connection net.Conn, i *icmp.ICMP) {
+func getHostname(ip string) (string, error) {
+	hostnames, err := net.LookupAddr(ip)
+	if err != nil {
+		return "", err
+	}
+
+	if len(hostnames) > 0 {
+		return hostnames[0], nil
+	}
+
+	return "", errors.New("Host Name not found")
+}
+
+func pinger(connection net.Conn, i *icmp.ICMP) {
 	seq := uint16(1)
 
 	t := time.NewTicker(1 * time.Second)
@@ -42,7 +55,6 @@ func pinger (connection net.Conn, i *icmp.ICMP) {
 		i.Seq = seq
 		i.Data = timeBinary
 
-		//fmt.Printf("Send : %s -- ", i.String())
 		_, err = connection.Write(i.Marshal())
 		if err != nil {
 			fmt.Fprintln(os.Stderr, err)
@@ -52,6 +64,35 @@ func pinger (connection net.Conn, i *icmp.ICMP) {
 		seq++
 	}
 	t.Stop()
+}
+
+func printReceiveData(receiveData []byte, n int) {
+	// Parse IP Header
+	iphdrLen := uint8(receiveData[0]&0xf) * 4
+	iphdr := &ipheader.IPHeader{}
+	err := iphdr.Parse(receiveData[:iphdrLen])
+	if err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		os.Exit(1)
+	}
+
+	//Get IP Addr and Host Name
+	dataSize := iphdr.TotalLen
+	ttl := iphdr.TTL
+	ipaddr := iphdr.SrcAddrString()
+	hostname, err := getHostname(ipaddr)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		os.Exit(1)
+	}
+
+	// Parse ICMP Message
+	receiveData = receiveData[iphdrLen:]
+	receiveMessage := &icmp.ICMP{}
+	receiveMessage.ParseEchoMessage(receiveData[:n])
+	seq := receiveMessage.Seq
+
+	fmt.Printf("%d bytes from %s (%s) : icmp_seq=%d ttl=%d time= ms\n", dataSize, hostname, ipaddr, seq, ttl)
 }
 
 func main() {
@@ -82,17 +123,18 @@ func main() {
 	// Create ICMP packet
 	id := uint16(os.Getpid() & 0xffff)
 	sendMessage := &icmp.ICMP{
-		Type : icmp.IcmpEchoReq,
-		Code : 0,
-		Id : id,
+		Type: icmp.IcmpEchoReq,
+		Code: 0,
+		Id:   id,
 	}
-	fmt.Println("PING", hostname, "(" + ip.String() + ")", "23 bytes of data.")
+	fmt.Println("PING", hostname, "("+ip.String()+")", "23 bytes of data.")
 
 	// Send a ICMP packet
 	go pinger(connect, sendMessage)
-	
+
 	// Receive a ICMP packet
 	for {
+		// Read Data
 		receiveData := make([]byte, 128)
 		n, err := connect.Read(receiveData)
 		if err != nil {
@@ -100,20 +142,6 @@ func main() {
 			os.Exit(1)
 		}
 
-		// Parse IP Header
-		iphdrLen := uint8(receiveData[0] & 0xf) * 4
-		iphdr := &ipheader.IPHeader{}
-		err = iphdr.Parse(receiveData[:iphdrLen])
-		if err != nil {
-			fmt.Fprintln(os.Stderr, err)
-			os.Exit(1)
-		}
-		receiveData = receiveData[iphdrLen:]
-
-		// Parse ICMP Message
-		receiveMessage := &icmp.ICMP{}
-		receiveMessage.ParseEchoMessage(receiveData[:n])
-
-		fmt.Printf("%d bytes from %s : icmp_seq=%d ttl=%d time= ms\n", iphdr.TotalLen, ip.String(), receiveMessage.Seq, iphdr.TTL)
+		printReceiveData(receiveData, n)
 	}
 }

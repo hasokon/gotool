@@ -1,6 +1,6 @@
 package icmp
 
-import(
+import (
 	"fmt"
 )
 
@@ -10,12 +10,12 @@ const (
 )
 
 type ICMP struct {
-	Type uint8
-	Code uint8
+	Type     uint8
+	Code     uint8
 	CheckSum uint16
-	Id uint16
-	Seq uint16
-	Data []byte
+	Id       uint16
+	Seq      uint16
+	Data     []byte
 }
 
 func (i *ICMP) String() string {
@@ -57,9 +57,9 @@ func (i *ICMP) Marshal() []byte {
 func checksum(buf []byte) uint16 {
 	len := len(buf)
 	sum := uint32(0)
-	
+
 	for len > 1 {
-		sum += uint32(buf[0]) << 8 | uint32(buf[1])
+		sum += uint32(buf[0])<<8 | uint32(buf[1])
 		buf = buf[2:]
 		len -= 2
 	}
@@ -77,9 +77,9 @@ func checksum(buf []byte) uint16 {
 func (i *ICMP) ParseEchoMessage(b []byte) error {
 	i.Type = uint8(b[0])
 	i.Code = uint8(b[1])
-	i.CheckSum = uint16(b[3]) << 8 + uint16(b[3])
-	i.Id = uint16(b[4]) << 8 + uint16(b[5])
-	i.Seq = uint16(b[6]) << 8 + uint16(b[7])
+	i.CheckSum = uint16(b[3])<<8 + uint16(b[3])
+	i.Id = uint16(b[4])<<8 + uint16(b[5])
+	i.Seq = uint16(b[6])<<8 + uint16(b[7])
 	i.Data = make([]byte, len(b[8:]))
 	copy(i.Data, b[8:])
 
