@@ -30,3 +30,5 @@
     --- google.com ping statistics ---
     5 packets transmitted, 5 received, 0% packet loss, time 5389ms
     rtt min/avg/max/mdev = 69.636/76.071/83.943/4.146 ms
+
+[Go で ping](http://tyamagu2.xyz/articles/go_ping/)を参考にさせて頂きました
