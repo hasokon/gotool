@@ -1,23 +1,23 @@
-## Goで作るコマンドラインツール
+# Goで作るコマンドラインツール
 
-# d2b
+## d2b
 
 10進数の値を2進数で表示するだけのコマンド
 
-**Example**
+### Example
 
     $ d2b 345
     $ 101011001
 
-**Options**
+### Options
 
 - r : 2進数を引数に取って10進数に変換する
 
-# goping
+## goping
 
  Goで実装したPingコマンド
  
-**Example**
+### Example
 
     $ goping google.com                                                                                       
     PING google.com (172.217.26.46) 23 bytes of data.
