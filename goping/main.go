@@ -10,8 +10,8 @@ import (
 	"syscall"
 	"time"
 	"math"
-	"work/gotool/goping/icmp"
-	"work/gotool/goping/ipheader"
+	"github.com/hasokon/gotool/goping/icmp"
+	"github.com/hasokon/gotool/goping/ipheader"
 )
 
 func getIPAddr(host string) (net.IP, error) {
