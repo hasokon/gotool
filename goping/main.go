@@ -6,7 +6,10 @@ import (
 	"fmt"
 	"net"
 	"os"
+	"os/signal"
+	"syscall"
 	"time"
+	"math"
 	"work/gotool/goping/icmp"
 	"work/gotool/goping/ipheader"
 )
@@ -39,34 +42,40 @@ func getHostname(ip string) (string, error) {
 	return "", errors.New("Host Name not found")
 }
 
-func pinger(connection net.Conn, i *icmp.ICMP) {
-	seq := uint16(1)
-
+func pinger(connection net.Conn, i *icmp.ICMP, exitNotifier chan int, sigint chan os.Signal) {
+	seq := uint16(0)
 	t := time.NewTicker(1 * time.Second)
-	for {
-		<-t.C
+	defer t.Stop()
 
-		timeBinary, err := time.Now().MarshalBinary()
-		if err != nil {
-			fmt.Fprintln(os.Stderr, err)
-			os.Exit(1)
+	done := false
+	for !done {
+		select {
+		case <-sigint:
+			done = true
+			break
+		case <-t.C:
+			timeBinary, err := time.Now().MarshalBinary()
+			if err != nil {
+				fmt.Fprintln(os.Stderr, err)
+				os.Exit(1)
+			}
+
+			seq++ // This value also indicates the number of packets sent
+			i.Seq = seq
+			i.Data = timeBinary
+
+			_, err = connection.Write(i.Marshal())
+			if err != nil {
+				fmt.Fprintln(os.Stderr, err)
+				os.Exit(1)
+			}
 		}
-
-		i.Seq = seq
-		i.Data = timeBinary
-
-		_, err = connection.Write(i.Marshal())
-		if err != nil {
-			fmt.Fprintln(os.Stderr, err)
-			os.Exit(1)
-		}
-
-		seq++
 	}
-	t.Stop()
+
+	exitNotifier <- int(seq)
 }
 
-func printReceiveData(receiveData []byte, n int) {
+func getPingStatus(receiveData []byte, n int) PingStatus {
 	// Parse IP Header
 	iphdrLen := uint8(receiveData[0]&0xf) * 4
 	iphdr := &ipheader.IPHeader{}
@@ -77,8 +86,8 @@ func printReceiveData(receiveData []byte, n int) {
 	}
 
 	//Get IP Addr and Host Name
-	dataSize := iphdr.TotalLen
-	ttl := iphdr.TTL
+	dataSize := uint(iphdr.TotalLen)
+	ttl := uint(iphdr.TTL)
 	ipaddr := iphdr.SrcAddrString()
 	hostname, err := getHostname(ipaddr)
 	if err != nil {
@@ -87,12 +96,64 @@ func printReceiveData(receiveData []byte, n int) {
 	}
 
 	// Parse ICMP Message
-	receiveData = receiveData[iphdrLen:]
+	receiveData = receiveData[iphdrLen:n]
 	receiveMessage := &icmp.ICMP{}
-	receiveMessage.ParseEchoMessage(receiveData[:n])
-	seq := receiveMessage.Seq
+	receiveMessage.ParseEchoMessage(receiveData)
+	seq := uint(receiveMessage.Seq)
 
-	fmt.Printf("%d bytes from %s (%s) : icmp_seq=%d ttl=%d time= ms\n", dataSize, hostname, ipaddr, seq, ttl)
+	transTime := time.Time{}
+	transTime.UnmarshalBinary(receiveMessage.Data)
+	rtt := time.Now().Sub(transTime)
+
+	return PingStatus {
+		DataSize : dataSize,
+		Hostname : hostname,
+		IPAddr : ipaddr,
+		Seq : seq,
+		TTL : ttl,
+		RTT : rtt.Seconds(),
+	}
+}
+
+func printPingResult(hostname string, startTime time.Time, transPackets int, statuslist []PingStatus) {
+	fmt.Println("\n---", hostname, "ping", "statistics", "---")
+
+	receivePackets := len(statuslist)
+	lostPackets := transPackets - receivePackets
+
+	totalTime := time.Now().Sub(startTime)
+	
+	fmt.Print(transPackets, " packets transmitted, ")
+	fmt.Print(receivePackets, " received, ")
+	fmt.Printf("%d%% packet loss, time %dms\n", lostPackets*100/transPackets, int(totalTime.Seconds()*1000))
+
+	if receivePackets == 0 {
+		return
+	}
+
+	min := statuslist[0].RTT
+	max := statuslist[0].RTT
+	avg := 0.0
+	for _, v := range statuslist {
+		rtt := v.RTT
+		avg += float64(rtt)
+		if min > rtt {
+			min = rtt
+		}
+		if max < rtt {
+			max = rtt
+		}
+	}
+	avg = avg / float64(receivePackets)
+
+	mdev := 0.0
+	for _, v := range statuslist {
+		rtt := v.RTT
+		mdev += math.Abs(avg - rtt)
+	}
+	mdev = mdev / float64(receivePackets)
+
+	fmt.Printf("rtt min/avg/max/mdev = %.3f/%.3f/%.3f/%.3f ms\n", min*1000, avg*1000, max*1000, mdev*1000)
 }
 
 func main() {
@@ -129,19 +190,38 @@ func main() {
 	}
 	fmt.Println("PING", hostname, "("+ip.String()+")", "23 bytes of data.")
 
+	// Make ExitNotifier
+	exitNotifier := make(chan int, 1)
+
+	// Make channel sigint receive
+	sigint := make(chan os.Signal,1)
+	signal.Notify(sigint, syscall.SIGINT)
+
 	// Send a ICMP packet
-	go pinger(connect, sendMessage)
+	startTime := time.Now()
+	go pinger(connect, sendMessage, exitNotifier, sigint)
 
 	// Receive a ICMP packet
-	for {
-		// Read Data
-		receiveData := make([]byte, 128)
-		n, err := connect.Read(receiveData)
-		if err != nil {
-			fmt.Fprintln(os.Stderr, err)
-			os.Exit(1)
+	done := false
+	statuslist := make([]PingStatus,0)
+	transPackets := 0
+	for !done {
+		select {
+		case transPackets = <-exitNotifier:
+			done = true
+		default:
+			// Read Data
+			receiveData := make([]byte, 128)
+			connect.SetReadDeadline(time.Now().Add(100 * time.Millisecond))
+			n, err := connect.Read(receiveData)
+			if err != nil {
+				continue
+			}
+			status := getPingStatus(receiveData, n)
+			fmt.Println(status)
+			statuslist = append(statuslist, status)
 		}
-
-		printReceiveData(receiveData, n)
 	}
+
+	printPingResult(hostname, startTime,transPackets, statuslist)
 }
